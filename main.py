@@ -1,9 +1,9 @@
-import datasets
+import data
 import roi_regression
 
 
 def main():
-    datasets.generate_dataset()
+    data.generate_dataset()
     roi_regression.grad_boost_regression()
 
 
