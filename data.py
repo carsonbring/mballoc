@@ -29,7 +29,15 @@ def generate_dataset(num_weeks=104):
         leads = rng.integers(20, 150)
         conversions = rng.integers(5, 50)
         roi = rng.integers(200, 500)
-
+        # add type
+        # ROI by channel
+        # roi overall campaign
+        # SUbcampains are initiates
+        # A/B testing - sometimes they will test 50 or 100 different ads
+        # Timing regarding certain times of data
+        # To a marketer, it's more anecdotal
+        # Time of day
+        # Return is traceable
         for week in range(num_weeks):
             trend_increase = channel_params[channel]["trend"]
             seasonality = 1 + channel_params[channel]["seasonality_amplitude"] * np.sin(
