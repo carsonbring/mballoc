@@ -70,95 +70,57 @@ def xgboost_regression():
         xgb_train = xgb.DMatrix(X_train_clean, y_train_clean, enable_categorical=True)
         xgb_test = xgb.DMatrix(X_test_clean, y_test_clean, enable_categorical=True)
 
-        n = 50
-        params = {
-            "max_depth": 3,
-            "eta": 0.1,
-            "tree_method": "hist",
-            "device": "cuda",
-        }
+        param_grid = [
+            {"max_depth": 3, "eta": 0.1, "subsample": 1.0},
+            {"max_depth": 4, "eta": 0.1, "subsample": 1.0},
+            {"max_depth": 3, "eta": 0.01, "subsample": 0.8},
+        ]
 
-        model = xgb.train(params=params, dtrain=xgb_train, num_boost_round=n)
-        model.set_param({"device": "cuda"})
-        preds = model.predict(xgb_test)
-        preds = preds.astype(int)
+        best_score = float("inf")
+        best_params = None
+        best_iteration = 0
+
+        for params in param_grid:
+            params.update(
+                {
+                    "objective": "reg:squarederror",
+                    "tree_method": "hist",
+                    "eval_metric": "rmse",
+                    "device": "cuda",
+                }
+            )
+
+            cv_results = xgb.cv(
+                params=params,
+                dtrain=xgb_train,
+                nfold=3,  # 3-fold cross validation
+                num_boost_round=200,  # max number of boosting rounds
+                early_stopping_rounds=10,
+                seed=13,
+            )
+            mean_rmse = cv_results["test-rmse-mean"].min()
+            best_round = cv_results["test-rmse-mean"].argmin()
+
+            print(f"Params: {params} => CV RMSE: {mean_rmse:.4f} at round {best_round}")
+
+            if mean_rmse < best_score:
+                best_score = mean_rmse
+                best_params = params.copy()
+                best_iteration = best_round
+
+        print("-" * 60)
+        print(f"Best parameters found: {best_params}")
+        print(f"Best RMSE: {best_score:.4f} (round {best_iteration})")
+
+        best_model = xgb.train(
+            params=best_params, dtrain=xgb_train, num_boost_round=best_iteration + 1
+        )
+        preds = best_model.predict(xgb_test)
         mse = mean_squared_error(y_test_clean, preds)
         r2 = r2_score(y_test_clean, preds)
+        print(f"PLATFORM: {reg_data.platform}")
         print("MSE:", mse)
         print("R²:", r2)
-
-        # y_pred_original = np.expm1(y_pred) - abs(p_df["roi"].min()) - 1
-        # y_test_original = np.expm1(y_test) - abs(p_df["roi"].min()) - 1
-    #
-    #     mse_original = mean_squared_error(y_test_original, y_pred_original)
-    #     rmse_original = np.sqrt(mse_original)
-    #     mae_original = mean_absolute_error(y_test_original, y_pred_original)
-    #     mape_original = mean_absolute_percentage_error(y_test_original, y_pred_original)
-    #     ev_original = explained_variance_score(y_test_original, y_pred_original)
-    #     r2_original = r2_score(y_test_original, y_pred_original)
-    #
-    #     results.append(
-    #         {
-    #             "platform": reg_data.platform,
-    #             "mse_log_scale": mean_squared_error(y_test_clean, y_pred),
-    #             "mse_original_scale": mse_original,
-    #             "rmse_original_scale": rmse_original,
-    #             "mae_original_scale": mae_original,
-    #             "mape_original_scale": mape_original,
-    #             "explained_variance_original_scale": ev_original,
-    #             "r2_original_scale": r2_original,
-    #         }
-    #     )
-    #
-    #     regressor = best_reg.named_steps["regressor"]
-    #     X_test_transformed = best_reg.named_steps["feature_selection"].transform(
-    #         best_reg.named_steps["scaler"].transform(
-    #             best_reg.named_steps["imputer"].transform(X_test_clean)
-    #         )
-    #     )
-    #
-    #     test_score = np.zeros((regressor.n_estimators,), dtype=np.float64)
-    #
-    #     for i, y_pred_iter in enumerate(regressor.staged_predict(X_test_transformed)):
-    #         test_score[i] = mean_squared_error(y_test_clean, y_pred_iter)
-    #
-    #     fig, ax = plt.subplots(figsize=(6, 6))
-    #     ax.set_title(f"{reg_data.platform}: Deviance")
-    #     ax.plot(
-    #         np.arange(regressor.n_estimators) + 1,
-    #         regressor.train_score_,
-    #         "b-",
-    #         label="Training Set Deviance",
-    #     )
-    #     ax.plot(
-    #         np.arange(regressor.n_estimators) + 1,
-    #         test_score,
-    #         "r-",
-    #         label="Test Set Deviance",
-    #     )
-    #     ax.legend(loc="upper right")
-    #     ax.set_xlabel("Boosting Iterations")
-    #     ax.set_ylabel("Deviance")
-    #     ax.grid(True)
-    #     fig.tight_layout()
-    #
-    #     all_figures.append(fig)
-    #     joblib.dump(best_reg, f"best_model_{reg_data.platform}.joblib")
-    #
-    # for result in results:
-    #     print(f"Platform: {result['platform']}")
-    #     print(f"  MSE (Log Scale): {result['mse_log_scale']:.4f}")
-    #     print(f"  MSE (Original Scale): {result['mse_original_scale']:.4f}")
-    #     print(f"  RMSE (Original Scale): {result['rmse_original_scale']:.4f}")
-    #     print(f"  MAE (Original Scale): {result['mae_original_scale']:.4f}")
-    #     print(f"  MAPE (Original Scale): {result['mape_original_scale']:.4f}")
-    #     print(
-    #         f"  Explained Variance (Original Scale): {result['explained_variance_original_scale']:.4f}"
-    #     )
-    #     print(f"  R² (Original Scale): {result['r2_original_scale']:.4f}\n")
-    #
-    # plt.show()
-    #
 
 
 def grad_boost_regression():
