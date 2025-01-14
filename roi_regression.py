@@ -1,3 +1,6 @@
+import matplotlib
+
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
@@ -30,8 +33,8 @@ import xgboost as xgb
 def xgboost_regression():
     all_data = data.load_data()
     platform_data = data.get_regression_data(all_data)
-    # results = []
-    # all_figures = []
+    results = []
+    all_figures = []
     for reg_data in platform_data:
         p_df = reg_data.dataframe
         X = p_df[
@@ -71,7 +74,11 @@ def xgboost_regression():
         xgb_test = xgb.DMatrix(X_test_clean, y_test_clean, enable_categorical=True)
 
         param_grid = [
-            {"max_depth": 3, "eta": 0.1, "subsample": 1.0},
+            {
+                "max_depth": 3,
+                "eta": 0.1,
+                "subsample": 1.0,
+            },
             {"max_depth": 4, "eta": 0.1, "subsample": 1.0},
             {"max_depth": 3, "eta": 0.01, "subsample": 0.8},
         ]
@@ -110,17 +117,70 @@ def xgboost_regression():
 
         print("-" * 60)
         print(f"Best parameters found: {best_params}")
-        print(f"Best RMSE: {best_score:.4f} (round {best_iteration})")
+        print(f"Best RMSE: {best_score:.6f} (round {best_iteration})")
 
+        evals_result = {}
         best_model = xgb.train(
-            params=best_params, dtrain=xgb_train, num_boost_round=best_iteration + 1
+            params=best_params,
+            dtrain=xgb_train,
+            num_boost_round=best_iteration + 1,
+            evals=[(xgb_train, "train"), (xgb_test, "eval")],
+            evals_result=evals_result,
+            verbose_eval=False,
         )
+
+        epochs = len(evals_result["train"]["rmse"])
+        x_axis = range(0, epochs)
+        plt.figure()
+        plt.plot(x_axis, evals_result["train"]["rmse"], label="Train")
+        plt.plot(x_axis, evals_result["eval"]["rmse"], label="Test")
+        plt.legend()
+        plt.xlabel("Boosting Round")
+        plt.ylabel("RMSE")
+        plt.title(f"Training vs Test RMSE for {reg_data.platform}")
+        plt.show(block=True)
+
         preds = best_model.predict(xgb_test)
         mse = mean_squared_error(y_test_clean, preds)
         r2 = r2_score(y_test_clean, preds)
-        print(f"PLATFORM: {reg_data.platform}")
-        print("MSE:", mse)
-        print("R²:", r2)
+
+        y_pred_original = np.expm1(preds) - abs(p_df["roi"].min()) - 1
+        y_test_original = np.expm1(y_test_clean) - abs(p_df["roi"].min()) - 1
+
+        mse_original = mean_squared_error(y_test_original, y_pred_original)
+        rmse_original = np.sqrt(mse_original)
+        mae_original = mean_absolute_error(y_test_original, y_pred_original)
+        mape_original = mean_absolute_percentage_error(y_test_original, y_pred_original)
+        ev_original = explained_variance_score(y_test_original, y_pred_original)
+        r2_original = r2_score(y_test_original, y_pred_original)
+
+        results.append(
+            {
+                "platform": reg_data.platform,
+                "r2": r2,
+                "mse_log_scale": mse,
+                "mse_original_scale": mse_original,
+                "rmse_original_scale": rmse_original,
+                "mae_original_scale": mae_original,
+                "mape_original_scale": mape_original,
+                "explained_variance_original_scale": ev_original,
+                "r2_original_scale": r2_original,
+            }
+        )
+        joblib.dump(best_model, f"best_model_{reg_data.platform}.joblib")
+
+    for result in results:
+        print(f"Platform: {result['platform']}")
+        print(f"  MSE (Log Scale): {result['mse_log_scale']:.4f}")
+        print(f"  MSE (Original Scale): {result['mse_original_scale']:.4f}")
+        print(f"  RMSE (Original Scale): {result['rmse_original_scale']:.4f}")
+        print(f"  MAE (Original Scale): {result['mae_original_scale']:.4f}")
+        print(f"  MAPE (Original Scale): {result['mape_original_scale']:.4f}")
+        print(
+            f"  Explained Variance (Original Scale): {result['explained_variance_original_scale']:.4f}"
+        )
+        print(f"  R² (Original Scale): {result['r2_original_scale']:.4f}")
+        print(f"  R²: {result['r2']:.4f}\n")
 
 
 def grad_boost_regression():
@@ -225,7 +285,7 @@ def grad_boost_regression():
         y_pred = best_reg.predict(X_test_clean)
 
         y_pred_original = np.expm1(y_pred) - abs(p_df["roi"].min()) - 1
-        y_test_original = np.expm1(y_test) - abs(p_df["roi"].min()) - 1
+        y_test_original = np.expm1(y_test_clean) - abs(p_df["roi"].min()) - 1
 
         mse_original = mean_squared_error(y_test_original, y_pred_original)
         rmse_original = np.sqrt(mse_original)
