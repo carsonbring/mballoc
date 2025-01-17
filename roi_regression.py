@@ -1,4 +1,5 @@
 import matplotlib
+from optuna.study.study import ObjectiveFuncType
 
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -28,102 +29,88 @@ from sklearn.feature_selection import SelectFromModel
 import joblib
 import data
 import xgboost as xgb
+import optuna
 
 
 def xgboost_regression():
-    all_data = data.load_data()
-    platform_data = data.get_regression_data(all_data)
-    results = []
-    all_figures = []
-    for reg_data in platform_data:
-        p_df = reg_data.dataframe
-        X = p_df[
-            [
-                "adspend",
-                "impressions",
-                "clicks",
-                "leads",
-                "conversions",
-                "lag_roi_1",
-                "lag_roi_2",
-                "spend_clicks",
-                "impression_leads",
-                "week_sin",
-                "week_cos",
-                "month_sin",
-                "month_cos",
-                "quarter_sin",
-                "quarter_cos",
-            ]
-        ]
-        y = p_df["log_roi"]
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.1, random_state=13
+    def objective(trial):
+        params = {
+            "objective": "reg:squarederror",
+            "tree_method": "hist",
+            "eval_metric": "rmse",
+            "device": "cuda",
+            "max_depth": trial.suggest_int("max_depth", 2, 10),
+            "eta": trial.suggest_float("eta", 1e-3, 1e-1, log=True),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        }
+        cv_results = xgb.cv(
+            params=params,
+            dtrain=xgb_train,
+            nfold=3,
+            num_boost_round=200,
+            early_stopping_rounds=10,
+            seed=13,
+            verbose_eval=False,
         )
-        z_scores = np.abs(stats.zscore(X_train))
+        mean_rmse = cv_results["test-rmse-mean"].min()
+        return mean_rmse
+
+    all_data = data.load_data()
+    platforms = data.get_platforms(all_data)
+    results = []
+    for platform in platforms:
+        p_data = data.load_test_train_data(platform, 0.8)
+        x_axis = range(0, len(p_data.full_df))
+
+        plt.figure()
+        plt.plot(
+            p_data.full_df["timestamp"],
+            p_data.full_df["log_roi"],
+            label="time/roi",
+        )
+        plt.legend()
+        plt.xlabel("Week number")
+        plt.ylabel("Log roi")
+        plt.title(f"Data for {platform}")
+        plt.show(block=True)
+
+        z_scores = np.abs(stats.zscore(p_data.X_train))
         train_mask = (z_scores < 3).all(axis=1)
-        X_train_clean = X_train[train_mask]
-        y_train_clean = y_train[train_mask]
+        X_train_clean = p_data.X_train[train_mask]
+        y_train_clean = p_data.y_train[train_mask]
 
-        z_scores_test = np.abs(stats.zscore(X_test))
-        test_mask = (z_scores_test < 3).all(axis=1)
-        X_test_clean = X_test[test_mask]
-        y_test_clean = y_test[test_mask]
+        z_scores_test = np.abs(stats.zscore(p_data.X_test))
+        test_mask = (z_scores_test < 3.5).all(axis=1)
+        X_test_clean = p_data.X_test[test_mask]
+        y_test_clean = p_data.y_test[test_mask]
 
-        xgb_train = xgb.DMatrix(X_train_clean, y_train_clean, enable_categorical=True)
-        xgb_test = xgb.DMatrix(X_test_clean, y_test_clean, enable_categorical=True)
+        X_train = X_train_clean
+        y_train = y_train_clean
 
-        param_grid = [
-            {
-                "max_depth": 3,
-                "eta": 0.1,
-                "subsample": 1.0,
-            },
-            {"max_depth": 4, "eta": 0.1, "subsample": 1.0},
-            {"max_depth": 3, "eta": 0.01, "subsample": 0.8},
-        ]
+        X_test = p_data.X_test
+        y_test = p_data.y_test
 
-        best_score = float("inf")
-        best_params = None
-        best_iteration = 0
+        xgb_train = xgb.DMatrix(X_train, y_train, enable_categorical=True)
+        xgb_test = xgb.DMatrix(X_test, y_test, enable_categorical=True)
 
-        for params in param_grid:
-            params.update(
-                {
-                    "objective": "reg:squarederror",
-                    "tree_method": "hist",
-                    "eval_metric": "rmse",
-                    "device": "cuda",
-                }
-            )
-
-            cv_results = xgb.cv(
-                params=params,
-                dtrain=xgb_train,
-                nfold=3,  # 3-fold cross validation
-                num_boost_round=200,  # max number of boosting rounds
-                early_stopping_rounds=10,
-                seed=13,
-            )
-            mean_rmse = cv_results["test-rmse-mean"].min()
-            best_round = cv_results["test-rmse-mean"].argmin()
-
-            print(f"Params: {params} => CV RMSE: {mean_rmse:.4f} at round {best_round}")
-
-            if mean_rmse < best_score:
-                best_score = mean_rmse
-                best_params = params.copy()
-                best_iteration = best_round
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=50)  # pyright: ignore
+        best_trial = study.best_trial
+        best_params = best_trial.params
+        best_score = best_trial.value
+        best_round = best_trial.number
 
         print("-" * 60)
         print(f"Best parameters found: {best_params}")
-        print(f"Best RMSE: {best_score:.6f} (round {best_iteration})")
+        print(f"Best RMSE: {best_score:.6f} (round {best_round})")
 
         evals_result = {}
         best_model = xgb.train(
             params=best_params,
             dtrain=xgb_train,
-            num_boost_round=best_iteration + 1,
+            num_boost_round=best_round + 1,
             evals=[(xgb_train, "train"), (xgb_test, "eval")],
             evals_result=evals_result,
             verbose_eval=False,
@@ -137,15 +124,15 @@ def xgboost_regression():
         plt.legend()
         plt.xlabel("Boosting Round")
         plt.ylabel("RMSE")
-        plt.title(f"Training vs Test RMSE for {reg_data.platform}")
+        plt.title(f"Training vs Test RMSE for {platform}")
         plt.show(block=True)
 
         preds = best_model.predict(xgb_test)
-        mse = mean_squared_error(y_test_clean, preds)
-        r2 = r2_score(y_test_clean, preds)
+        mse = mean_squared_error(y_test, preds)
+        r2 = r2_score(y_test, preds)
 
-        y_pred_original = np.expm1(preds) - abs(p_df["roi"].min()) - 1
-        y_test_original = np.expm1(y_test_clean) - abs(p_df["roi"].min()) - 1
+        y_pred_original = np.expm1(preds) - abs(all_data["roi"].min()) - 1
+        y_test_original = np.expm1(y_test) - abs(all_data["roi"].min()) - 1
 
         mse_original = mean_squared_error(y_test_original, y_pred_original)
         rmse_original = np.sqrt(mse_original)
@@ -156,7 +143,7 @@ def xgboost_regression():
 
         results.append(
             {
-                "platform": reg_data.platform,
+                "platform": platform,
                 "r2": r2,
                 "mse_log_scale": mse,
                 "mse_original_scale": mse_original,
@@ -167,7 +154,7 @@ def xgboost_regression():
                 "r2_original_scale": r2_original,
             }
         )
-        joblib.dump(best_model, f"best_model_{reg_data.platform}.joblib")
+        joblib.dump(best_model, f"best_model_{platform}.joblib")
 
     for result in results:
         print(f"Platform: {result['platform']}")

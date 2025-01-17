@@ -9,7 +9,16 @@ class RegressionData:
     dataframe: pd.DataFrame
 
 
-def generate_dataset(num_weeks=104):
+@dataclass
+class TrainTestData:
+    full_df: pd.DataFrame
+    X_train: pd.DataFrame
+    y_train: pd.DataFrame
+    X_test: pd.DataFrame
+    y_test: pd.DataFrame
+
+
+def generate_dataset(num_weeks=1000):
     np.random.seed(42)
     rng = np.random.default_rng()
 
@@ -125,6 +134,66 @@ def load_data():
     return df
 
 
+def load_test_train_data(platform: str, train_percent=0.9) -> TrainTestData:
+    p_df = load_data()
+
+    p_df = p_df.sort_values(by="timestamp")
+
+    p_df = p_df[p_df["channel"] == platform]
+    train_size = int(len(p_df) * train_percent)
+    train_df = p_df.iloc[:train_size].copy()
+    test_df = p_df.iloc[train_size:].copy()
+
+    X_train = train_df[
+        [
+            "adspend",
+            "impressions",
+            "clicks",
+            "leads",
+            "conversions",
+            "lag_roi_1",
+            "lag_roi_2",
+            "spend_clicks",
+            "impression_leads",
+            "week_sin",
+            "week_cos",
+            "month_sin",
+            "month_cos",
+            "quarter_sin",
+            "quarter_cos",
+        ]
+    ]
+    y_train = train_df["log_roi"]
+
+    X_test = test_df[
+        [
+            "adspend",
+            "impressions",
+            "clicks",
+            "leads",
+            "conversions",
+            "lag_roi_1",
+            "lag_roi_2",
+            "spend_clicks",
+            "impression_leads",
+            "week_sin",
+            "week_cos",
+            "month_sin",
+            "month_cos",
+            "quarter_sin",
+            "quarter_cos",
+        ]
+    ]
+    y_test = test_df["log_roi"]
+
+    return TrainTestData(p_df, X_train, y_train, X_test, y_test)
+
+
+def get_platforms(df: pd.DataFrame) -> list[str]:
+    return list(df["channel"].unique())
+
+
+# TODO: Deprecate
 def get_regression_data(df: pd.DataFrame) -> list[RegressionData]:
     reg_data = []
     platforms = df["channel"].unique()
